@@ -17,7 +17,6 @@
 package com.netflix.spinnaker.clouddriver.google.provider.agent
 
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.google.api.client.googleapis.batch.BatchRequest
 import com.google.api.client.googleapis.batch.json.JsonBatchCallback
 import com.google.api.client.http.HttpHeaders
 import com.google.api.services.compute.Compute
@@ -31,6 +30,7 @@ import com.netflix.spinnaker.cats.provider.ProviderCache
 import com.netflix.spinnaker.clouddriver.google.cache.CacheResultBuilder
 import com.netflix.spinnaker.clouddriver.google.cache.Keys
 import com.netflix.spinnaker.clouddriver.google.deploy.GCEUtil
+import com.netflix.spinnaker.clouddriver.google.batch.GoogleBatchRequest
 import com.netflix.spinnaker.clouddriver.google.security.GoogleNamedAccountCredentials
 import groovy.util.logging.Slf4j
 
@@ -83,7 +83,7 @@ class GoogleImageCachingAgent extends AbstractGoogleCachingAgent {
     allImageProjects.each { imageProjectToNextPageTokenMap[it] = null }
 
     while (imageProjectToNextPageTokenMap) {
-      BatchRequest imageListBatch = buildBatchRequest()
+      GoogleBatchRequest imageListBatch = buildGoogleBatchRequest()
       AllImagesCallback<ImageList> imageListCallback =
         new AllImagesCallback(imageProjectToNextPageTokenMap: imageProjectToNextPageTokenMap, imageList: imageList)
 
@@ -94,7 +94,7 @@ class GoogleImageCachingAgent extends AbstractGoogleCachingAgent {
           imagesList = imagesList.setPageToken(pageToken)
         }
 
-        imagesList.queue(imageListBatch, imageListCallback)
+        imageListBatch.queue(imagesList, imageListCallback)
       }
 
       executeIfRequestsAreQueued(imageListBatch, "ImageCaching.image")
@@ -104,7 +104,7 @@ class GoogleImageCachingAgent extends AbstractGoogleCachingAgent {
   }
 
   private CacheResult buildCacheResult(ProviderCache _, List<Image> imageList) {
-    log.info("Describing items in ${agentType}")
+    log.debug("Describing items in ${agentType}")
 
     def cacheResultBuilder = new CacheResultBuilder()
 
@@ -116,7 +116,7 @@ class GoogleImageCachingAgent extends AbstractGoogleCachingAgent {
       }
     }
 
-    log.info("Caching ${cacheResultBuilder.namespace(IMAGES.ns).keepSize()} items in ${agentType}")
+    log.debug("Caching ${cacheResultBuilder.namespace(IMAGES.ns).keepSize()} items in ${agentType}")
 
     cacheResultBuilder.build()
   }

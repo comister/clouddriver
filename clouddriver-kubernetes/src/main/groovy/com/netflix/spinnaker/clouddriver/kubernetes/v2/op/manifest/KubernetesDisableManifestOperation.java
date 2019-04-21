@@ -17,42 +17,27 @@
 
 package com.netflix.spinnaker.clouddriver.kubernetes.v2.op.manifest;
 
-import com.netflix.spinnaker.clouddriver.data.task.Task;
-import com.netflix.spinnaker.clouddriver.data.task.TaskRepository;
-import com.netflix.spinnaker.clouddriver.kubernetes.v2.description.KubernetesCoordinates;
+import com.netflix.spinnaker.clouddriver.kubernetes.v2.description.JsonPatch;
 import com.netflix.spinnaker.clouddriver.kubernetes.v2.description.KubernetesResourcePropertyRegistry;
-import com.netflix.spinnaker.clouddriver.kubernetes.v2.description.manifest.KubernetesDisableManifestDescription;
-import com.netflix.spinnaker.clouddriver.kubernetes.v2.op.OperationResult;
-import com.netflix.spinnaker.clouddriver.kubernetes.v2.security.KubernetesV2Credentials;
-import com.netflix.spinnaker.clouddriver.orchestration.AtomicOperation;
+import com.netflix.spinnaker.clouddriver.kubernetes.v2.description.manifest.KubernetesEnableDisableManifestDescription;
+import com.netflix.spinnaker.clouddriver.kubernetes.v2.description.manifest.KubernetesManifest;
+import com.netflix.spinnaker.clouddriver.kubernetes.v2.op.handler.CanLoadBalance;
 
 import java.util.List;
 
-public class KubernetesDisableManifestOperation implements AtomicOperation<OperationResult> {
-  private final KubernetesDisableManifestDescription description;
-  private final KubernetesV2Credentials credentials;
-  private final KubernetesResourcePropertyRegistry registry;
-  private final String accountName;
-  private static final String OP_NAME = "DISABLE_KUBERNETES_MANIFEST";
-
-  public KubernetesDisableManifestOperation(KubernetesDisableManifestDescription description, KubernetesResourcePropertyRegistry registry) {
-    this.description = description;
-    this.credentials = (KubernetesV2Credentials) description.getCredentials().getCredentials();
-    this.accountName = description.getCredentials().getName();
-    this.registry = registry;
-  }
-
-  private static Task getTask() {
-    return TaskRepository.threadLocalTask.get();
+public class KubernetesDisableManifestOperation extends AbstractKubernetesEnableDisableManifestOperation {
+  public KubernetesDisableManifestOperation(KubernetesEnableDisableManifestDescription description,
+      KubernetesResourcePropertyRegistry registry) {
+    super(description, registry);
   }
 
   @Override
-  public OperationResult operate(List priorOutputs) {
-    getTask().updateStatus(OP_NAME, "Starting disable operation...");
-    KubernetesCoordinates coordinates = description.getPointCoordinates();
+  protected String getVerbName() {
+    return "disable";
+  }
 
-    // TODO(lwander)
-
-    return null;
+  @Override
+  protected List<JsonPatch> patchResource(CanLoadBalance loadBalancerHandler, KubernetesManifest loadBalancer, KubernetesManifest target) {
+    return loadBalancerHandler.detachPatch(loadBalancer, target);
   }
 }

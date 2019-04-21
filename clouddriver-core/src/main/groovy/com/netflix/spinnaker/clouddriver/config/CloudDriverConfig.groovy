@@ -16,7 +16,9 @@
 
 package com.netflix.spinnaker.clouddriver.config
 
+import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.netflix.spectator.api.Registry
 import com.netflix.spinnaker.cats.agent.ExecutionInstrumentation
 import com.netflix.spinnaker.cats.agent.NoopExecutionInstrumentation
 import com.netflix.spinnaker.cats.redis.cache.RedisCacheOptions
@@ -35,6 +37,7 @@ import com.netflix.spinnaker.clouddriver.core.limits.ServiceLimitConfiguration
 import com.netflix.spinnaker.clouddriver.core.limits.ServiceLimitConfigurationBuilder
 import com.netflix.spinnaker.clouddriver.core.provider.CoreProvider
 import com.netflix.spinnaker.clouddriver.core.services.Front50Service
+import com.netflix.spinnaker.clouddriver.deploy.DescriptionAuthorizer
 import com.netflix.spinnaker.clouddriver.model.ApplicationProvider
 import com.netflix.spinnaker.clouddriver.model.CloudMetricProvider
 import com.netflix.spinnaker.clouddriver.model.ClusterProvider
@@ -73,14 +76,17 @@ import com.netflix.spinnaker.clouddriver.search.ApplicationSearchProvider
 import com.netflix.spinnaker.clouddriver.search.NoopSearchProvider
 import com.netflix.spinnaker.clouddriver.search.ProjectSearchProvider
 import com.netflix.spinnaker.clouddriver.search.SearchProvider
+import com.netflix.spinnaker.clouddriver.search.executor.SearchExecutorConfig
 import com.netflix.spinnaker.clouddriver.security.AccountCredentialsProvider
 import com.netflix.spinnaker.clouddriver.security.AccountCredentialsRepository
 import com.netflix.spinnaker.clouddriver.security.DefaultAccountCredentialsProvider
 import com.netflix.spinnaker.clouddriver.security.MapBackedAccountCredentialsRepository
+import com.netflix.spinnaker.fiat.shared.FiatPermissionEvaluator
 import com.netflix.spinnaker.kork.core.RetrySupport
 import com.netflix.spinnaker.kork.jedis.RedisClientDelegate
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
+import org.springframework.boot.autoconfigure.jackson.Jackson2ObjectMapperBuilderCustomizer
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.ApplicationContext
@@ -89,6 +95,7 @@ import org.springframework.context.annotation.Configuration
 import org.springframework.context.annotation.Import
 import org.springframework.context.annotation.PropertySource
 import org.springframework.core.env.Environment
+import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder
 import org.springframework.web.client.RestTemplate
 
 import javax.inject.Provider
@@ -98,7 +105,8 @@ import java.time.Clock
 @Import([
   RedisConfig,
   DynomiteConfig,
-  CacheConfig
+  CacheConfig,
+  SearchExecutorConfig
 ])
 @PropertySource(value = "classpath:META-INF/clouddriver-core.properties", ignoreResourceNotFound = true)
 @EnableConfigurationProperties(ProjectClustersCachingAgentProperties)
@@ -108,6 +116,18 @@ class CloudDriverConfig {
   @ConditionalOnMissingBean(Clock)
   Clock clock() {
     Clock.systemDefaultZone()
+  }
+
+  @Bean
+  Jackson2ObjectMapperBuilderCustomizer defaultObjectMapperCustomizer() {
+    return new Jackson2ObjectMapperBuilderCustomizer() {
+      @Override
+      void customize(Jackson2ObjectMapperBuilder jacksonObjectMapperBuilder) {
+        jacksonObjectMapperBuilder.serializationInclusion(JsonInclude.Include.NON_NULL)
+        jacksonObjectMapperBuilder.failOnEmptyBeans(false)
+        jacksonObjectMapperBuilder.failOnUnknownProperties(false)
+      }
+    }
   }
 
   @Bean
@@ -277,6 +297,7 @@ class CloudDriverConfig {
   }
 
   @Bean
+  @ConditionalOnExpression('${redis.enabled:true}')
   CoreProvider coreProvider(RedisCacheOptions redisCacheOptions,
                             RedisClientDelegate redisClientDelegate,
                             ApplicationContext applicationContext,
@@ -305,5 +326,16 @@ class CloudDriverConfig {
   @Bean
   NamerRegistry namerRegistry(Optional<List<NamingStrategy>> namingStrategies) {
     new NamerRegistry(namingStrategies.orElse([]))
+  }
+
+  @Bean
+  DescriptionAuthorizer descriptionAuthorizer(Registry registry,
+                                              ObjectMapper objectMapper,
+                                              Optional<FiatPermissionEvaluator> fiatPermissionEvaluator) {
+    return new DescriptionAuthorizer(
+      registry,
+      objectMapper,
+      fiatPermissionEvaluator
+    )
   }
 }

@@ -19,6 +19,7 @@ package com.netflix.spinnaker.clouddriver.kubernetes.v2.caching.agent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.netflix.spectator.api.Registry;
+import com.netflix.spinnaker.cats.agent.AgentIntervalAware;
 import com.netflix.spinnaker.cats.agent.CacheResult;
 import com.netflix.spinnaker.cats.agent.DefaultCacheResult;
 import com.netflix.spinnaker.cats.cache.CacheData;
@@ -48,11 +49,14 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 
 @Slf4j
-public abstract class KubernetesV2CachingAgent extends KubernetesCachingAgent<KubernetesV2Credentials> {
+public abstract class KubernetesV2CachingAgent extends KubernetesCachingAgent<KubernetesV2Credentials> implements AgentIntervalAware {
   protected KubectlJobExecutor jobExecutor;
 
   @Getter
   protected String providerName = KubernetesCloudProvider.getID();
+
+  @Getter
+  final protected Long agentInterval;
 
   private final KubernetesResourcePropertyRegistry propertyRegistry;
 
@@ -61,13 +65,22 @@ public abstract class KubernetesV2CachingAgent extends KubernetesCachingAgent<Ku
       ObjectMapper objectMapper,
       Registry registry,
       int agentIndex,
-      int agentCount) {
+      int agentCount,
+      Long agentInterval) {
     super(namedAccountCredentials, objectMapper, registry, agentIndex, agentCount);
     this.propertyRegistry = propertyRegistry;
+    this.agentInterval = agentInterval;
   }
 
   protected KubernetesKind primaryKind() {
     throw new NotImplementedException("No primary kind registered, this is an implementation error.");
+  }
+
+  protected Map<String, Object> defaultIntrospectionDetails() {
+    Map<String, Object> result = new HashMap<>();
+    result.put("namespaces", namespaces);
+    result.put("kinds", primaryKinds());
+    return result;
   }
 
   protected List<KubernetesKind> primaryKinds() {
@@ -75,13 +88,13 @@ public abstract class KubernetesV2CachingAgent extends KubernetesCachingAgent<Ku
   }
 
   protected Map<KubernetesKind, List<KubernetesManifest>> loadPrimaryResourceList() {
-    Map<KubernetesKind, List<KubernetesManifest>> result = namespaces.stream()
+    Map<KubernetesKind, List<KubernetesManifest>> result = namespaces.parallelStream()
         .map(n -> {
           try {
             return credentials.list(primaryKinds(), n);
           } catch (KubectlException e) {
-            log.warn("Failed to read kind {} from namespace {}: {}", primaryKinds(), n, e.getMessage());
-            return null;
+            log.warn("{}: Failed to read kind {} from namespace {}: {}", getAgentType(), primaryKinds(), n, e.getMessage());
+            throw e;
           }
         })
         .filter(Objects::nonNull)
@@ -115,11 +128,15 @@ public abstract class KubernetesV2CachingAgent extends KubernetesCachingAgent<Ku
 
   @Override
   public CacheResult loadData(ProviderCache providerCache) {
-    log.info(getAgentType() + " is starting");
+    log.info(getAgentType() + ": agent is starting");
     reloadNamespaces();
+    Map<String, Object> details = defaultIntrospectionDetails();
 
     try {
-      return buildCacheResult(loadPrimaryResourceList());
+      Long start = System.currentTimeMillis();
+      Map<KubernetesKind, List<KubernetesManifest>> primaryResourceList = loadPrimaryResourceList();
+      details.put("timeSpentInKubectlMs", System.currentTimeMillis() - start);
+      return buildCacheResult(primaryResourceList);
     } catch (KubectlJobExecutor.NoResourceTypeException e) {
       log.warn(getAgentType() + ": resource for this caching agent is not supported for this cluster");
       return new DefaultCacheResult(new HashMap<>());
@@ -146,7 +163,7 @@ public abstract class KubernetesV2CachingAgent extends KubernetesCachingAgent<Ku
               return cacheData;
             }
           } catch (Exception e) {
-            log.warn("Failure converting {} as resource", rs, e);
+            log.warn("{}: Failure converting {} as resource", getAgentType(), rs, e);
             return null;
           }
         })
@@ -167,6 +184,11 @@ public abstract class KubernetesV2CachingAgent extends KubernetesCachingAgent<Ku
 
     resourceData.addAll(invertedRelationships);
 
+    resourceData.addAll(resourceData.stream()
+      .map(rs -> KubernetesCacheDataConverter.getClusterRelationships(accountName, rs))
+      .filter(Objects::nonNull)
+      .collect(Collectors.toList()));
+
     Map<String, Collection<CacheData>> entries = KubernetesCacheDataConverter.stratifyCacheDataByGroup(KubernetesCacheDataConverter.dedupCacheData(resourceData));
     KubernetesCacheDataConverter.logStratifiedCacheData(getAgentType(), entries);
 
@@ -179,7 +201,7 @@ public abstract class KubernetesV2CachingAgent extends KubernetesCachingAgent<Ku
       try {
         RegistryUtils.addRelationships(propertyRegistry, accountName, k, allResources, result);
       } catch (Exception e) {
-        log.warn("Failure adding relationships for {}", k, e);
+        log.warn("{}: Failure adding relationships for {}", getAgentType(), k, e);
       }
     });
     return result;
